@@ -3,19 +3,90 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
+// ================= SYSTEM UTILITIES (NEW) =================
+
+// Handles concurrency-safe custom ID generation
+// e.g. entityType="INVOICE", prefix="INV/24-25/", currentNumber=101
+model NumberSeries {
+  id            String   @id @default(uuid())
+  entityType    String   @unique // "SALES_ORDER", "INVOICE", "PO", "GRN"
+  prefix        String?  // Dynamic prefix
+  suffix        String?
+  currentNumber Int      @default(0) 
+  padding       Int      @default(4) // e.g. 0001
+  
+  updatedAt     DateTime @updatedAt
+}
+
+// ================= USER & AUTH =================
 model User {
   id        String   @id @default(uuid())
-  name      String  
-  username  String   @unique 
+  name      String
+  username  String   @unique
   password  String
-  roleName  String   @map("role_name") 
+   
+  roleName  String   @map("role_name")
   role      RolePermission @relation(fields: [roleName], references: [role])
+
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt 
+  updatedAt DateTime @updatedAt
+
+  // --- Audit Relations (Prisma requires these inverse relations) ---
+  // NOTE: In your API, avoid "include: { itemsCreated: true }" to prevent data bloat.
+  
+  itemsCreated      Item[]      @relation("ItemCreator")
+  itemsUpdated      Item[]      @relation("ItemUpdater")
+  groupsCreated     ItemGroup[] @relation("GroupCreator")
+  groupsUpdated     ItemGroup[] @relation("GroupUpdater")
+  hsnCreated        HsnMaster[] @relation("HsnCreator")
+  hsnUpdated        HsnMaster[] @relation("HsnUpdater")
+  warehousesCreated Warehouse[] @relation("WarehouseCreator")
+
+  vendorsCreated    Vendor[]        @relation("VendorCreator")
+  vendorsUpdated    Vendor[]        @relation("VendorUpdater")
+  customersCreated  CustomerParty[] @relation("CustomerCreator")
+  customersUpdated  CustomerParty[] @relation("CustomerUpdater")
+
+  soCreated         SalesOrder[]    @relation("SoCreator")
+  schedulesCreated  OrderSchedule[] @relation("ScheduleCreator")
+  dispatchesCreated Dispatch[]      @relation("DispatchCreator")
+  invoicesCreated   SalesInvoice[]  @relation("InvoiceCreator")
+
+  transfersCreated  ItemTransfer[]  @relation("TransferCreator")
+  transfersUpdated  ItemTransfer[]  @relation("TransferUpdater")
+
+  costCentersCreated CostCenter[]   @relation("CostCenterCreator")
+  costCentersUpdated CostCenter[]   @relation("CostCenterUpdater")
+
+  machinesCreated    MachineMaster[] @relation("MachineCreator")
+  machinesUpdated    MachineMaster[] @relation("MachineUpdater")
+  machineIssuesCreated MachineIssue[] @relation("MachineIssueCreator")
+  machineIssuesUpdated MachineIssue[] @relation("MachineIssueUpdater")
+
+  packedBoxesCreated PackingForm[]  @relation("PackingCreator")
+  packedBoxesUpdated PackingForm[]  @relation("PackingUpdater")
+
+  requisitionsCreated MaterialRequisition[] @relation("RequisitionCreator")
+  indentsCreated      PurchaseIndent[]      @relation("IndentCreator")
+  posCreated          PurchaseOrder[]       @relation("POCreator")
+  grnsCreated         GRN[]                 @relation("GRNCreator")
+  purchaseBillsCreated PurchaseBill[]       @relation("PurchaseBillCreator")
+
+  salesReturnsCreated    SalesReturn[]    @relation("SalesReturnCreator")
+  purchaseReturnsCreated PurchaseReturn[] @relation("PurchaseReturnCreator")
+
+  creditNotesCreated     CreditNote[]     @relation("CreditNoteCreator")
+  debitNotesCreated      DebitNote[]      @relation("DebitNoteCreator")
+
+  receiptsCreated MoneyReceipt[] @relation("ReceiptCreator")
+  paymentsCreated MoneyPayment[] @relation("PaymentCreator")
+  contrasCreated  ContraEntry[]  @relation("ContraCreator")
+
+  settlementsCreated BillSettlement[] @relation("SettlementCreator")
 }
 
 model RolePermission {
@@ -23,4 +94,918 @@ model RolePermission {
   role        String   @unique
   permissions Json     @map("permission")
   users       User[]
+}
+
+// ================= FINANCE & ACCOUNTING =================
+
+model AccountGroup {
+  id            String   @id @default(uuid())
+  name          String   @unique 
+   
+  parentGroupId String?  @map("parent_group_id")
+  parentGroup   AccountGroup? @relation("GroupHierarchy", fields: [parentGroupId], references: [id])
+  subGroups     AccountGroup[] @relation("GroupHierarchy")
+
+  ledgers       Ledger[] 
+   
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Ledger {
+  id             String   @id @default(uuid())
+  name           String    
+  code           String?  @unique
+   
+  groupId        String   @map("group_id")
+  group          AccountGroup @relation(fields: [groupId], references: [id])
+   
+  openingBalance Float    @default(0) @map("opening_balance")
+  currentBalance Float    @default(0) @map("current_balance")
+
+  vendor         Vendor?
+  customerParty  CustomerParty?
+  
+  receipts       MoneyReceipt[]
+  payments       MoneyPayment[]
+  
+  journalEntries JournalEntry[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// VOUCHERS
+model JournalVoucher {
+  id          String   @id @default(uuid())
+  voucherNo   String   @unique @map("voucher_no") 
+  voucherDate DateTime @default(now()) @map("voucher_date")
+  
+  // NEW: Fiscal Year Tracking
+  fiscalYear  String   @map("fiscal_year") // e.g. "2024-2025"
+  
+  narration   String?  
+
+  salesInvoiceId String? @unique @map("sales_invoice_id")
+  salesInvoice   SalesInvoice? @relation(fields: [salesInvoiceId], references: [id])
+
+  purchaseBillId String? @unique @map("purchase_bill_id")
+  purchaseBill   PurchaseBill? @relation(fields: [purchaseBillId], references: [id])
+
+  creditNoteId   String?       @unique @map("credit_note_id")
+  creditNote     CreditNote?   @relation(fields: [creditNoteId], references: [id])
+
+  debitNoteId    String?       @unique @map("debit_note_id")
+  debitNote      DebitNote?    @relation(fields: [debitNoteId], references: [id])
+
+  receiptId      String?       @unique @map("receipt_id")
+  receipt        MoneyReceipt? @relation(fields: [receiptId], references: [id])
+
+  paymentId      String?       @unique @map("payment_id")
+  payment        MoneyPayment? @relation(fields: [paymentId], references: [id])
+
+  contraId       String?       @unique @map("contra_id")
+  contra         ContraEntry?  @relation(fields: [contraId], references: [id])
+
+  entries     JournalEntry[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model JournalEntry {
+  id              String         @id @default(uuid())
+  
+  journalVoucherId String        @map("journal_voucher_id")
+  journalVoucher   JournalVoucher @relation(fields: [journalVoucherId], references: [id], onDelete: Cascade)
+
+  ledgerId        String         @map("ledger_id")
+  ledger          Ledger         @relation(fields: [ledgerId], references: [id])
+
+  amount          Float
+  type            String         
+
+  createdAt       DateTime       @default(now())
+}
+
+// ================= FINANCIAL NOTES & TRANSACTIONS =================
+
+model CreditNote {
+  id              String   @id @default(uuid())
+  cnNo            String   @unique @map("cn_no") 
+  cnDate          DateTime @default(now()) @map("cn_date")
+  fiscalYear      String   @map("fiscal_year") // NEW
+
+  customerPartyId String?  @map("customer_party_id")
+  customerParty   CustomerParty? @relation(fields: [customerPartyId], references: [id])
+  
+  reason          String   
+  amount          Float
+  
+  salesReturnId   String?  @unique @map("sales_return_id")
+  salesReturn     SalesReturn? @relation(fields: [salesReturnId], references: [id])
+
+  settlements     BillSettlement[]
+  journalVoucher  JournalVoucher?
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("CreditNoteCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model DebitNote {
+  id              String   @id @default(uuid())
+  dnNo            String   @unique @map("dn_no") 
+  dnDate          DateTime @default(now()) @map("dn_date")
+  fiscalYear      String   @map("fiscal_year") // NEW
+
+  vendorId        String?  @map("vendor_id")
+  vendor          Vendor?  @relation(fields: [vendorId], references: [id])
+
+  customerPartyId String?  @map("customer_party_id")
+  customerParty   CustomerParty? @relation(fields: [customerPartyId], references: [id])
+
+  reason          String   
+  amount          Float
+
+  purchaseReturnId String? @unique @map("purchase_return_id")
+  purchaseReturn   PurchaseReturn? @relation(fields: [purchaseReturnId], references: [id])
+
+  settlements     BillSettlement[]
+  journalVoucher  JournalVoucher?
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("DebitNoteCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model MoneyReceipt {
+  id             String   @id @default(uuid())
+  receiptNo      String   @unique @map("receipt_no") 
+  receiptDate    DateTime @default(now()) @map("receipt_date")
+  fiscalYear     String   @map("fiscal_year") // NEW
+
+  customerPartyId String? @map("customer_party_id")
+  customerParty   CustomerParty? @relation(fields: [customerPartyId], references: [id])
+  
+  ledgerId       String?  @map("ledger_id")
+  ledger         Ledger?  @relation(fields: [ledgerId], references: [id])
+
+  mode           String   
+  amount         Float
+  
+  chequeNo       String?  @map("cheque_no")
+  chequeDate     DateTime? @map("cheque_date")
+  bankName       String?  @map("bank_name")
+  transactionRef String?  @map("transaction_ref") 
+
+  chequeStatus   String   @default("CLEARED") 
+  chequeReturnDate DateTime? @map("cheque_return_date")
+
+  unusedAmount   Float    @default(0) @map("unused_amount")
+  settlements    BillSettlement[]
+
+  journalVoucher JournalVoucher?
+
+  createdById    String   @map("created_by")
+  createdBy      User     @relation("ReceiptCreator", fields: [createdById], references: [id])
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model MoneyPayment {
+  id             String   @id @default(uuid())
+  paymentNo      String   @unique @map("payment_no") 
+  paymentDate    DateTime @default(now()) @map("payment_date")
+  fiscalYear     String   @map("fiscal_year") // NEW
+
+  vendorId       String?  @map("vendor_id")
+  vendor         Vendor?  @relation(fields: [vendorId], references: [id])
+  
+  ledgerId       String?  @map("ledger_id")
+  ledger         Ledger?  @relation(fields: [ledgerId], references: [id])
+
+  mode           String   
+  amount         Float
+  
+  chequeNo       String?  @map("cheque_no")
+  chequeDate     DateTime? @map("cheque_date")
+  bankName       String?  @map("bank_name") 
+  transactionRef String?  @map("transaction_ref")
+
+  chequeStatus   String   @default("CLEARED") 
+  chequeReturnDate DateTime? @map("cheque_return_date")
+
+  unusedAmount   Float    @default(0) @map("unused_amount")
+  settlements    BillSettlement[]
+
+  journalVoucher JournalVoucher?
+
+  createdById    String   @map("created_by")
+  createdBy      User     @relation("PaymentCreator", fields: [createdById], references: [id])
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model ContraEntry {
+  id             String   @id @default(uuid())
+  contraNo       String   @unique @map("contra_no") 
+  contraDate     DateTime @default(now()) @map("contra_date")
+  fiscalYear     String   @map("fiscal_year") // NEW
+
+  type           String   
+  amount         Float
+  
+  description    String?  
+
+  journalVoucher JournalVoucher?
+
+  createdById    String   @map("created_by")
+  createdBy      User     @relation("ContraCreator", fields: [createdById], references: [id])
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// ================= BILL SETTLEMENT =================
+
+model BillSettlement {
+  id              String   @id @default(uuid())
+  settlementDate  DateTime @default(now()) @map("settlement_date")
+  amount          Float    
+
+  moneyReceiptId  String?       @map("money_receipt_id")
+  moneyReceipt    MoneyReceipt? @relation(fields: [moneyReceiptId], references: [id])
+
+  salesInvoiceId  String?       @map("sales_invoice_id")
+  salesInvoice    SalesInvoice? @relation(fields: [salesInvoiceId], references: [id])
+
+  moneyPaymentId  String?       @map("money_payment_id")
+  moneyPayment    MoneyPayment? @relation(fields: [moneyPaymentId], references: [id])
+
+  purchaseBillId  String?       @map("purchase_bill_id")
+  purchaseBill    PurchaseBill? @relation(fields: [purchaseBillId], references: [id])
+
+  creditNoteId    String?       @map("credit_note_id")
+  creditNote      CreditNote?   @relation(fields: [creditNoteId], references: [id])
+
+  debitNoteId     String?       @map("debit_note_id")
+  debitNote       DebitNote?    @relation(fields: [debitNoteId], references: [id])
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("SettlementCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ================= PARTIES =================
+
+model Vendor {
+  id          String   @id @default(uuid())
+  name        String
+  email       String?  @unique
+  number      String?  
+  address     String?
+  gstin       String?  @map("gstin")
+  panNumber   String?  @map("pan_number")
+
+  ledgerId    String   @unique @map("ledger_id")
+  ledger      Ledger   @relation(fields: [ledgerId], references: [id])
+
+  purchaseOrders PurchaseOrder[] 
+  debitNotes     DebitNote[]
+  payments       MoneyPayment[] 
+
+  createdById String   @map("created_by")
+  createdBy   User     @relation("VendorCreator", fields: [createdById], references: [id])
+   
+  updatedById String?  @map("updated_by")
+  updatedBy   User?    @relation("VendorUpdater", fields: [updatedById], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CustomerParty {
+  id          String   @id @default(uuid())
+  name        String
+  email       String?  @unique
+  number      String?
+  address     String?  
+  gstin       String?
+  panNumber   String?  @map("pan_number")
+
+  ledgerId    String   @unique @map("ledger_id")
+  ledger      Ledger   @relation(fields: [ledgerId], references: [id])
+
+  deliveryAddresses CustomerDeliveryRelation[] 
+  salesOrders       SalesOrder[]
+  
+  creditNotes       CreditNote[] 
+  debitNotes        DebitNote[] 
+  receipts          MoneyReceipt[]
+
+  createdById String   @map("created_by")
+  createdBy   User     @relation("CustomerCreator", fields: [createdById], references: [id])
+   
+  updatedById String?  @map("updated_by")
+  updatedBy   User?    @relation("CustomerUpdater", fields: [updatedById], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model DeliveryParty {
+  id          String   @id @default(uuid())
+  name        String    
+  address     String    
+
+  customers   CustomerDeliveryRelation[] 
+  schedules   OrderSchedule[] 
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CustomerDeliveryRelation {
+  customerId    String        @map("customer_id")
+  deliveryId    String        @map("delivery_id")
+
+  customerParty CustomerParty @relation(fields: [customerId], references: [id])
+  deliveryParty DeliveryParty @relation(fields: [deliveryId], references: [id])
+
+  @@id([customerId, deliveryId]) 
+}
+
+// ================= INVENTORY MASTER =================
+
+model HsnMaster {
+  hsnCode     String   @id @unique
+  description String?
+  gstRate     Float    @map("gst_rate")
+   
+  createdById String   @map("created_by")
+  createdBy   User     @relation("HsnCreator", fields: [createdById], references: [id])
+  updatedById String?  @map("updated_by")
+  updatedBy   User?    @relation("HsnUpdater", fields: [updatedById], references: [id])
+
+  items       Item[]
+    
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ItemGroup {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+    
+  createdById String   @map("created_by")
+  createdBy   User     @relation("GroupCreator", fields: [createdById], references: [id])
+
+  updatedById String?  @map("updated_by")
+  updatedBy   User?    @relation("GroupUpdater", fields: [updatedById], references: [id])
+
+  items       Item[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Item {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  uom         String
+    
+  itemGroupId String   @map("item_group_id")
+  itemGroup   ItemGroup @relation(fields: [itemGroupId], references: [id])
+    
+  hsnCode     String   @map("hsn_code")
+  hsn         HsnMaster @relation(fields: [hsnCode], references: [hsnCode])
+
+  createdById String   @map("created_by")
+  createdBy   User     @relation("ItemCreator", fields: [createdById], references: [id])
+
+  updatedById String?  @map("updated_by")
+  updatedBy   User?    @relation("ItemUpdater", fields: [updatedById], references: [id])
+
+  inventory     Inventory[] 
+  salesItems    SalesOrderItem[]
+  transfers     ItemTransfer[] 
+  machineIssues MachineIssue[] 
+  packedBoxes   PackingForm[] 
+  
+  requisitionItems RequisitionItem[]
+  indentItems      IndentItem[]
+  poItems          PurchaseOrderItem[]
+  grnItems         GRNItem[]
+
+  salesReturns    SalesReturnItem[]
+  purchaseReturns PurchaseReturnItem[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ================= WAREHOUSE =================
+
+model Warehouse {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  isActive    Boolean  @default(true) @map("is_active")
+   
+  createdById String   @map("created_by")
+  createdBy   User     @relation("WarehouseCreator", fields: [createdById], references: [id])
+
+  inventory     Inventory[]
+  machines      MachineMaster[] 
+  machineIssues MachineIssue[] 
+  packedBoxes   PackingForm[] 
+
+  salesOrderItems SalesOrderItem[] 
+  orderSchedules  OrderSchedule[]  
+  dispatches      Dispatch[]       
+
+  outgoingTransfers ItemTransfer[] @relation("OutgoingTransfers")
+  incomingTransfers ItemTransfer[] @relation("IncomingTransfers")
+
+  requisitions     MaterialRequisition[] @relation("RequisitionRequestor")
+  indents          PurchaseIndent[]
+  grns             GRN[] 
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CostCenter {
+  id          String   @id @default(uuid())
+  name        String   @unique 
+  description String?
+  
+  transfers   ItemTransfer[] 
+  
+  requisitions     MaterialRequisition[]
+  indents          PurchaseIndent[]
+  purchaseOrders   PurchaseOrder[]
+
+  createdById String   @map("created_by")
+  createdBy   User     @relation("CostCenterCreator", fields: [createdById], references: [id])
+  
+  updatedById String?  @map("updated_by")
+  updatedBy   User?    @relation("CostCenterUpdater", fields: [updatedById], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model MachineMaster {
+  id          String   @id @default(uuid())
+  name        String   @unique 
+  
+  warehouseId String   @map("warehouse_id")
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  
+  issues      MachineIssue[] 
+  productionOutput PackingForm[]
+
+  createdById String   @map("created_by")
+  createdBy   User     @relation("MachineCreator", fields: [createdById], references: [id])
+
+  updatedById String?  @map("updated_by")
+  updatedBy   User?    @relation("MachineUpdater", fields: [updatedById], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Inventory {
+  itemId      String    @map("item_id")
+  warehouseId String    @map("warehouse_id")
+  stock       Float     @default(0) 
+   
+  item        Item      @relation(fields: [itemId], references: [id])
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+   
+  lastUpdated DateTime  @updatedAt
+
+  @@id([itemId, warehouseId])
+}
+
+// ================= PURCHASE FLOW =================
+
+model MaterialRequisition {
+  id              String   @id @default(uuid())
+  reqNo           String   @unique @map("req_no") 
+  reqDate         DateTime @default(now()) @map("req_date")
+  
+  requestingWarehouseId String @map("requesting_warehouse_id")
+  requestingWarehouse   Warehouse @relation("RequisitionRequestor", fields: [requestingWarehouseId], references: [id])
+  
+  costCenterId    String?  @map("cost_center_id")
+  costCenter      CostCenter? @relation(fields: [costCenterId], references: [id])
+
+  status          String   @default("PENDING") 
+  
+  items           RequisitionItem[]
+  fulfillmentTransfer ItemTransfer? 
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("RequisitionCreator", fields: [createdById], references: [id])
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model RequisitionItem {
+  id              String   @id @default(uuid())
+  requisitionId   String   @map("requisition_id")
+  requisition     MaterialRequisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  itemId          String   @map("item_id")
+  item            Item     @relation(fields: [itemId], references: [id])
+  quantity        Float    
+}
+
+model PurchaseIndent {
+  id              String   @id @default(uuid())
+  indentNo        String   @unique @map("indent_no") 
+  indentDate      DateTime @default(now()) @map("indent_date")
+  
+  materialRequisitionId String? @map("material_requisition_id")
+
+  warehouseId     String   @map("warehouse_id")
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+
+  costCenterId    String?  @map("cost_center_id")
+  costCenter      CostCenter? @relation(fields: [costCenterId], references: [id])
+
+  status          String   @default("PENDING") 
+  
+  isApproved      Boolean  @default(false)
+  approvedById    String?  @map("approved_by") 
+
+  items           IndentItem[]
+  purchaseOrder   PurchaseOrder? 
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("IndentCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model IndentItem {
+  id              String   @id @default(uuid())
+  indentId        String   @map("indent_id")
+  indent          PurchaseIndent @relation(fields: [indentId], references: [id], onDelete: Cascade)
+  itemId          String   @map("item_id")
+  item            Item     @relation(fields: [itemId], references: [id])
+  quantity        Float    
+  expectedRate    Float?   @map("expected_rate") 
+}
+
+model PurchaseOrder {
+  id              String   @id @default(uuid())
+  poNo            String   @unique @map("po_no")
+  poDate          DateTime @default(now()) @map("po_date")
+  
+  vendorId        String   @map("vendor_id")
+  vendor          Vendor   @relation(fields: [vendorId], references: [id])
+  
+  indentId        String?  @unique @map("indent_id")
+  indent          PurchaseIndent? @relation(fields: [indentId], references: [id])
+
+  costCenterId    String?  @map("cost_center_id")
+  costCenter      CostCenter? @relation(fields: [costCenterId], references: [id])
+
+  status          String   @default("OPEN") 
+
+  items           PurchaseOrderItem[]
+  grns            GRN[]    
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("POCreator", fields: [createdById], references: [id])
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PurchaseOrderItem {
+  id              String   @id @default(uuid())
+  purchaseOrderId String   @map("purchase_order_id")
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  itemId          String   @map("item_id")
+  item            Item     @relation(fields: [itemId], references: [id])
+  quantity        Float    
+  rate            Float    
+  amount          Float    
+  receivedQty     Float    @default(0) 
+}
+
+model GRN {
+  id              String   @id @default(uuid())
+  grnNo           String   @unique @map("grn_no")
+  grnDate         DateTime @default(now()) @map("grn_date")
+
+  purchaseOrderId String   @map("purchase_order_id")
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  
+  vendorInvoiceNo String?  @map("vendor_invoice_no")
+  
+  warehouseId     String   @map("warehouse_id")
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+
+  items           GRNItem[]
+  purchaseBill    PurchaseBill? 
+
+  returns         PurchaseReturn[]
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("GRNCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model GRNItem {
+  id              String   @id @default(uuid())
+  grnId           String   @map("grn_id")
+  grn             GRN      @relation(fields: [grnId], references: [id], onDelete: Cascade)
+  itemId          String   @map("item_id")
+  item            Item     @relation(fields: [itemId], references: [id])
+  acceptedQty     Float    
+  rejectedQty     Float    @default(0)
+}
+
+model PurchaseBill {
+  id              String   @id @default(uuid())
+  billNo          String   @unique @map("bill_no") 
+  billDate        DateTime @default(now()) @map("bill_date")
+  fiscalYear      String   @map("fiscal_year") // NEW
+
+  grnId           String   @unique @map("grn_id")
+  grn             GRN      @relation(fields: [grnId], references: [id])
+
+  totalAmount     Float    @map("total_amount")
+  taxAmount       Float    @default(0) @map("tax_amount")
+  grandTotal      Float    @map("grand_total")
+
+  journalVoucher  JournalVoucher? 
+
+  paidAmount      Float    @default(0) @map("paid_amount")
+  balanceAmount   Float    @default(0) @map("balance_amount")
+  status          String   @default("UNPAID")
+  
+  settlements     BillSettlement[]
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("PurchaseBillCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ================= INTERNAL OPERATIONS =================
+
+model ItemTransfer {
+  id              String   @id @default(uuid())
+  transferNo      String   @unique @map("transfer_no") 
+  itemId          String   @map("item_id")
+  item            Item     @relation(fields: [itemId], references: [id])
+  fromWarehouseId String   @map("from_warehouse_id")
+  fromWarehouse   Warehouse @relation("OutgoingTransfers", fields: [fromWarehouseId], references: [id])
+  toWarehouseId   String   @map("to_warehouse_id")
+  toWarehouse     Warehouse @relation("IncomingTransfers", fields: [toWarehouseId], references: [id])
+  costCenterId    String?     @map("cost_center_id")
+  costCenter      CostCenter? @relation(fields: [costCenterId], references: [id])
+  materialRequisitionId String? @unique @map("material_requisition_id")
+  materialRequisition   MaterialRequisition? @relation(fields: [materialRequisitionId], references: [id])
+  quantity        Float    
+  transferDate    DateTime @default(now()) @map("transfer_date")
+  description     String?  
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("TransferCreator", fields: [createdById], references: [id])
+  updatedById     String?  @map("updated_by")
+  updatedBy       User?    @relation("TransferUpdater", fields: [updatedById], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model MachineIssue {
+  id            String   @id @default(uuid())
+  issueNo       String   @unique @map("issue_no") 
+  warehouseId   String   @map("warehouse_id")
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  machineId     String   @map("machine_id")
+  machine       MachineMaster @relation(fields: [machineId], references: [id])
+  itemId        String   @map("item_id")
+  item          Item     @relation(fields: [itemId], references: [id])
+  quantity      Float    
+  issuedAt      DateTime @default(now()) @map("issued_at")
+  description   String?  
+  createdById   String   @map("created_by")
+  createdBy     User     @relation("MachineIssueCreator", fields: [createdById], references: [id])
+  updatedById   String?  @map("updated_by")
+  updatedBy     User?    @relation("MachineIssueUpdater", fields: [updatedById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model PackingForm {
+  id            String   @id @default(uuid())
+  boxNumber     String   @unique @map("box_number") 
+  itemId        String   @map("item_id")
+  item          Item     @relation(fields: [itemId], references: [id])
+  warehouseId   String   @map("warehouse_id")
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  machineId     String   @map("machine_id")
+  machine       MachineMaster @relation(fields: [machineId], references: [id])
+  grossWeight   Float    @map("gross_weight") 
+  boxWeight     Float    @map("box_weight")   
+  copsWeight    Float    @map("cops_weight")  
+  netWeight     Float    @map("net_weight")   
+  dispatchId    String?   @map("dispatch_id")
+  dispatch      Dispatch? @relation(fields: [dispatchId], references: [id])
+  packedAt      DateTime @default(now()) @map("packed_at")
+  createdById   String   @map("created_by")
+  createdBy     User     @relation("PackingCreator", fields: [createdById], references: [id])
+  updatedById   String?  @map("updated_by")
+  updatedBy     User?    @relation("PackingUpdater", fields: [updatedById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ================= SALES FLOW =================
+
+model SalesOrder {
+  id              String   @id @default(uuid())
+  orderNo         String   @unique @map("order_no")
+  orderDate       DateTime @default(now()) @map("order_date")
+  status          String   @default("DRAFT") 
+  isApproved      Boolean  @default(false)   @map("is_approved")
+  approvedById    String?  @map("approved_by")
+  customerPartyId String   @map("customer_party_id")
+  customerParty   CustomerParty @relation(fields: [customerPartyId], references: [id])
+  items           SalesOrderItem[]
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("SoCreator", fields: [createdById], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model SalesOrderItem {
+  id           String     @id @default(uuid())
+  salesOrderId String     @map("sales_order_id")
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  itemId       String     @map("item_id")
+  item         Item       @relation(fields: [itemId], references: [id])
+  warehouseId  String     @map("warehouse_id")
+  warehouse    Warehouse  @relation(fields: [warehouseId], references: [id])
+  quantity     Int        
+  baseRate     Float      @map("base_rate") 
+  amount       Float      
+  pendingQty   Int        @default(0) 
+  schedules    OrderSchedule[] 
+}
+
+model OrderSchedule {
+  id               String        @id @default(uuid())
+  scheduleNo       String        @unique @map("schedule_no") 
+  salesOrderItemId String        @map("sales_order_item_id")
+  salesOrderItem   SalesOrderItem @relation(fields: [salesOrderItemId], references: [id], onDelete: Cascade)
+  warehouseId      String        @map("warehouse_id")
+  warehouse        Warehouse     @relation(fields: [warehouseId], references: [id])
+  scheduledDate    DateTime      @map("scheduled_date")
+  quantity         Int           
+  status           String        @default("PENDING") 
+  grade            String        @default("1ST")   
+  rateRefuse       Float         @default(0)       @map("rate_refuse") 
+  finalRate        Float         @map("final_rate") 
+  deliveryPartyId  String        @map("delivery_party_id")
+  deliveryParty    DeliveryParty @relation(fields: [deliveryPartyId], references: [id])
+  dispatch         Dispatch? 
+  createdById      String        @map("created_by")
+  createdBy        User          @relation("ScheduleCreator", fields: [createdById], references: [id])
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+}
+
+model Dispatch {
+  id              String        @id @default(uuid())
+  dispatchNo      String        @unique @map("dispatch_no") 
+  orderScheduleId String        @unique @map("order_schedule_id")
+  orderSchedule   OrderSchedule @relation(fields: [orderScheduleId], references: [id])
+  dispatchDate    DateTime      @default(now())
+  warehouseId     String        @map("warehouse_id") 
+  warehouse       Warehouse     @relation(fields: [warehouseId], references: [id])
+  packedBoxes     PackingForm[]
+  invoice         SalesInvoice?
+  createdById     String        @map("created_by")
+  createdBy       User          @relation("DispatchCreator", fields: [createdById], references: [id])
+}
+
+model SalesInvoice {
+  id            String   @id @default(uuid())
+  invoiceNo     String   @unique @map("invoice_no") 
+  invoiceDate   DateTime @default(now()) @map("invoice_date")
+  fiscalYear    String   @map("fiscal_year") // NEW
+
+  dispatchId    String   @unique @map("dispatch_id")
+  dispatch      Dispatch @relation(fields: [dispatchId], references: [id])
+  journalVoucher JournalVoucher? 
+  returns       SalesReturn[] 
+  
+  totalQty      Float    @map("total_qty")      
+  appliedRate   Float    @map("applied_rate")   
+  taxableAmount Float    @map("taxable_amount") 
+  sgstAmount    Float    @default(0) @map("sgst_amount")
+  cgstAmount    Float    @default(0) @map("cgst_amount")
+  igstAmount    Float    @default(0) @map("igst_amount")
+  grandTotal    Float    @map("grand_total") 
+  
+  paidAmount    Float    @default(0) @map("paid_amount")
+  balanceAmount Float    @default(0) @map("balance_amount")
+  status        String   @default("UNPAID")
+
+  settlements   BillSettlement[]
+
+  createdById   String   @map("created_by")
+  createdBy     User     @relation("InvoiceCreator", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ================= LOGISTICS RETURNS =================
+
+model SalesReturn {
+  id              String   @id @default(uuid())
+  returnNo        String   @unique @map("return_no") 
+  returnDate      DateTime @default(now()) @map("return_date")
+
+  salesInvoiceId  String   @map("sales_invoice_id")
+  salesInvoice    SalesInvoice @relation(fields: [salesInvoiceId], references: [id])
+
+  totalQty        Float    @map("total_qty")
+  totalAmount     Float    @map("total_amount") 
+  
+  creditNote      CreditNote? 
+
+  items           SalesReturnItem[]
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("SalesReturnCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model SalesReturnItem {
+  id              String      @id @default(uuid())
+  salesReturnId   String      @map("sales_return_id")
+  salesReturn     SalesReturn @relation(fields: [salesReturnId], references: [id], onDelete: Cascade)
+  itemId          String      @map("item_id")
+  item            Item        @relation(fields: [itemId], references: [id])
+  quantity        Float       
+  rate            Float       
+  amount          Float       
+}
+
+model PurchaseReturn {
+  id              String   @id @default(uuid())
+  returnNo        String   @unique @map("return_no") 
+  returnDate      DateTime @default(now()) @map("return_date")
+
+  grnId           String   @map("grn_id")
+  grn             GRN      @relation(fields: [grnId], references: [id])
+
+  totalQty        Float    @map("total_qty")
+  totalAmount     Float    @map("total_amount") 
+  
+  debitNote       DebitNote? 
+
+  items           PurchaseReturnItem[]
+
+  createdById     String   @map("created_by")
+  createdBy       User     @relation("PurchaseReturnCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PurchaseReturnItem {
+  id              String         @id @default(uuid())
+  purchaseReturnId String        @map("purchase_return_id")
+  purchaseReturn   PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
+  itemId          String         @map("item_id")
+  item            Item           @relation(fields: [itemId], references: [id])
+  quantity        Float          
+  rate            Float          
+  amount          Float          
 }
